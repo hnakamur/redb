@@ -707,3 +707,152 @@ impl<'db, 'txn> BenchIterator for SanakirjaBenchIterator<'db, 'txn> {
         })
     }
 }
+
+pub struct FjallBenchDatabase<'a> {
+    db: &'a fjall::TxKeyspace,
+}
+
+impl<'a> FjallBenchDatabase<'a> {
+    #[allow(dead_code)]
+    pub fn new(db: &'a fjall::TxKeyspace) -> Self {
+        Self { db }
+    }
+}
+
+impl<'a> BenchDatabase for FjallBenchDatabase<'a> {
+    type W<'db> = FjallBenchWriteTransaction<'db> where Self: 'db;
+    type R<'db> = FjallBenchReadTransaction where Self: 'db;
+
+    fn db_type_name() -> &'static str {
+        "fjall"
+    }
+
+    fn write_transaction(&self) -> Self::W<'_> {
+        let part = self
+            .db
+            .open_partition("default", Default::default())
+            .unwrap();
+        let txn = self.db.write_tx();
+        FjallBenchWriteTransaction { txn, part }
+    }
+
+    fn read_transaction(&self) -> Self::R<'_> {
+        let part = self
+            .db
+            .open_partition("default", Default::default())
+            .unwrap();
+        let txn = self.db.read_tx();
+        FjallBenchReadTransaction { txn, part }
+    }
+}
+
+pub struct FjallBenchWriteTransaction<'db> {
+    txn: fjall::WriteTransaction<'db>,
+    part: fjall::TxPartitionHandle,
+}
+
+impl<'db> BenchWriteTransaction for FjallBenchWriteTransaction<'db> {
+    type W<'txn> = FjallBenchInserter<'db, 'txn> where Self: 'txn;
+
+    fn get_inserter(&mut self) -> Self::W<'_> {
+        FjallBenchInserter {
+            txn: &mut self.txn,
+            part: &mut self.part,
+        }
+    }
+
+    fn commit(self) -> Result<(), ()> {
+        self.txn.commit().map_err(|_| ())
+    }
+}
+
+pub struct FjallBenchInserter<'db, 'txn> {
+    txn: &'txn mut fjall::WriteTransaction<'db>,
+    part: &'txn mut fjall::TxPartitionHandle,
+}
+
+impl BenchInserter for FjallBenchInserter<'_, '_> {
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<(), ()> {
+        self.txn.insert(self.part, key, value);
+        Ok(())
+    }
+
+    fn remove(&mut self, key: &[u8]) -> Result<(), ()> {
+        self.txn.remove(self.part, key);
+        Ok(())
+    }
+}
+
+pub struct FjallBenchReadTransaction {
+    txn: fjall::ReadTransaction,
+    part: fjall::TxPartitionHandle,
+}
+
+impl BenchReadTransaction for FjallBenchReadTransaction {
+    type T<'txn> = FjallBenchReader<'txn> where Self: 'txn;
+
+    fn get_reader(&self) -> Self::T<'_> {
+        FjallBenchReader {
+            txn: &self.txn,
+            part: &self.part,
+        }
+    }
+}
+
+pub struct FjallBenchReader<'txn> {
+    txn: &'txn fjall::ReadTransaction,
+    part: &'txn fjall::TxPartitionHandle,
+}
+
+impl<'txn> BenchReader for FjallBenchReader<'txn> {
+    type Output<'out> = FjallAccessGuard where Self: 'out;
+    type Iterator<'out> = FjallBenchIterator where Self: 'out;
+
+    fn get<'a>(&'a self, key: &[u8]) -> Option<Self::Output<'a>> {
+        self.txn
+            .get(self.part, key)
+            .unwrap()
+            .map(|s| FjallAccessGuard::new(s))
+    }
+
+    fn range_from<'a>(&'a self, key: &'a [u8]) -> Self::Iterator<'a> {
+        let iter = Box::new(self.txn.range(&self.part, key..));
+
+        FjallBenchIterator { iter }
+    }
+
+    fn len(&self) -> u64 {
+        self.txn.len(self.part).unwrap() as u64
+    }
+}
+
+pub struct FjallAccessGuard {
+    inner: fjall::Slice,
+}
+
+impl FjallAccessGuard {
+    fn new(inner: fjall::Slice) -> Self {
+        Self { inner }
+    }
+}
+
+impl AsRef<[u8]> for FjallAccessGuard {
+    fn as_ref(&self) -> &[u8] {
+        self.inner.as_ref()
+    }
+}
+
+pub struct FjallBenchIterator {
+    iter: Box<dyn DoubleEndedIterator<Item = fjall::Result<fjall::KvPair>> + 'static>,
+}
+
+impl BenchIterator for FjallBenchIterator {
+    type Output<'out> = fjall::Slice where Self: 'out;
+
+    fn next(&mut self) -> Option<(Self::Output<'_>, Self::Output<'_>)> {
+        self.iter.next().map(|x| {
+            let x = x.unwrap();
+            (x.0, x.1)
+        })
+    }
+}
