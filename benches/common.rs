@@ -710,45 +710,38 @@ impl<'db, 'txn> BenchIterator for SanakirjaBenchIterator<'db, 'txn> {
 
 pub struct FjallBenchDatabase<'a> {
     db: &'a fjall::TxKeyspace,
+    part: &'a fjall::TxPartition,
 }
 
 impl<'a> FjallBenchDatabase<'a> {
     #[allow(dead_code)]
-    pub fn new(db: &'a fjall::TxKeyspace) -> Self {
-        Self { db }
+    pub fn new(db: &'a fjall::TxKeyspace, part: &'a fjall::TxPartition) -> Self {
+        Self { db, part }
     }
 }
 
 impl<'a> BenchDatabase for FjallBenchDatabase<'a> {
     type W<'db> = FjallBenchWriteTransaction<'db> where Self: 'db;
-    type R<'db> = FjallBenchReadTransaction where Self: 'db;
+    type R<'db> = FjallBenchReadTransaction<'db> where Self: 'db;
 
     fn db_type_name() -> &'static str {
         "fjall"
     }
 
     fn write_transaction(&self) -> Self::W<'_> {
-        let part = self
-            .db
-            .open_partition("default", Default::default())
-            .unwrap();
         let txn = self.db.write_tx();
-        FjallBenchWriteTransaction { txn, part }
+        FjallBenchWriteTransaction { txn, part: self.part }
     }
 
     fn read_transaction(&self) -> Self::R<'_> {
-        let part = self
-            .db
-            .open_partition("default", Default::default())
-            .unwrap();
         let txn = self.db.read_tx();
-        FjallBenchReadTransaction { txn, part }
+        FjallBenchReadTransaction { txn, part: self.part }
     }
 }
 
 pub struct FjallBenchWriteTransaction<'db> {
     txn: fjall::WriteTransaction<'db>,
-    part: fjall::TxPartitionHandle,
+    part: &'db fjall::TxPartitionHandle,
 }
 
 impl<'db> BenchWriteTransaction for FjallBenchWriteTransaction<'db> {
@@ -757,7 +750,7 @@ impl<'db> BenchWriteTransaction for FjallBenchWriteTransaction<'db> {
     fn get_inserter(&mut self) -> Self::W<'_> {
         FjallBenchInserter {
             txn: &mut self.txn,
-            part: &mut self.part,
+            part: self.part,
         }
     }
 
@@ -768,7 +761,7 @@ impl<'db> BenchWriteTransaction for FjallBenchWriteTransaction<'db> {
 
 pub struct FjallBenchInserter<'db, 'txn> {
     txn: &'txn mut fjall::WriteTransaction<'db>,
-    part: &'txn mut fjall::TxPartitionHandle,
+    part: &'txn fjall::TxPartitionHandle,
 }
 
 impl BenchInserter for FjallBenchInserter<'_, '_> {
@@ -783,18 +776,18 @@ impl BenchInserter for FjallBenchInserter<'_, '_> {
     }
 }
 
-pub struct FjallBenchReadTransaction {
+pub struct FjallBenchReadTransaction<'db> {
     txn: fjall::ReadTransaction,
-    part: fjall::TxPartitionHandle,
+    part: &'db fjall::TxPartitionHandle,
 }
 
-impl BenchReadTransaction for FjallBenchReadTransaction {
+impl<'db> BenchReadTransaction for FjallBenchReadTransaction<'db> {
     type T<'txn> = FjallBenchReader<'txn> where Self: 'txn;
 
     fn get_reader(&self) -> Self::T<'_> {
         FjallBenchReader {
             txn: &self.txn,
-            part: &self.part,
+            part: self.part,
         }
     }
 }

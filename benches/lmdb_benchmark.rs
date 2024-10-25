@@ -428,7 +428,10 @@ fn main() {
         let db = fjall::Config::new(tmpfile.path())
             .open_transactional()
             .unwrap();
-        let table = FjallBenchDatabase::new(&db);
+        let part = db
+            .open_partition("default", Default::default())
+            .unwrap();
+            let table = FjallBenchDatabase::new(&db, &part);
         let mut results = benchmark(table);
         results.push(("compaction".to_string(), ResultType::NA));
         let size = database_size(tmpfile.path());
